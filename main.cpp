@@ -9,7 +9,7 @@
 // resource interface
 class Resource {
 public:
-    virtual int inc(int syncOrder) = 0;
+    virtual int inc(int max_threads, int thread_num) = 0;
 };
 
 
@@ -17,14 +17,14 @@ public:
 class ResourceAtomicSpin : public Resource {
     volatile int val = 0;
     std::atomic<int> spin_lock;
-    virtual int inc(int syncOrder) {
+    virtual int inc(int max_threads, int thread_num) {
         int expect;
         // spin lock
         do {
             expect = 0;
         } while (spin_lock.compare_exchange_weak(expect, 1, std::memory_order_acquire, std::memory_order_acquire));
         // threade safe code
-        if (val % syncOrder == 0)
+        if (val % max_threads == thread_num)
             val++;
         int ret = val;
         // spin unlock
@@ -39,11 +39,11 @@ class ResourceAtomicSpin : public Resource {
 class ResourceAtomicFlag : public Resource {
     volatile int val = 0;
     std::atomic_flag std_spin_lock = ATOMIC_FLAG_INIT;
-    virtual int inc(int syncOrder) {
+    virtual int inc(int max_threads, int thread_num) {
         // std spin lock
         while (std_spin_lock.test_and_set(std::memory_order_acquire));
         // threade safe code
-        if (val % syncOrder == 0)
+        if (val % max_threads == thread_num)
             val++;
         int ret = val;
         // std spin unlock
@@ -58,10 +58,10 @@ class ResourceAtomicFlag : public Resource {
 class ResourceMutex : public Resource {
     volatile int val = 0;
     std::mutex m;
-    virtual int inc(int syncOrder) {
+    virtual int inc(int max_threads, int thread_num) {
         m.lock();
         // threade safe code
-        if (val % syncOrder == 0)
+        if (val % max_threads == thread_num)
             val++;
         int ret = val;
         m.unlock();
@@ -72,8 +72,8 @@ class ResourceMutex : public Resource {
 
 
 // thread worker function
-void worker(int thread_num, int max_count, Resource& r) {
-    while (r.inc(thread_num) < max_count);
+void worker(int max_threads, int thread_num, int max_count, Resource& r) {
+    while (r.inc(max_threads, thread_num) < max_count);
 };
 
 
@@ -84,7 +84,7 @@ int execSync(int max_threads, int max_count, Resource& r) {
     auto t1 = std::chrono::high_resolution_clock::now();
 
     for (int i = 0; i < max_threads; i++) {
-        std::thread th(worker, i + 1, max_count, std::ref(r));
+        std::thread th(worker, max_threads, i, max_count, std::ref(r));
         threads.push_back(std::move(th));
     }
 
@@ -111,12 +111,13 @@ int main(int argc, char** argv) {
     if (argc > 1) {
         try {
             max_count = std::stoi(argv[1]);
+            max_count = max_count < 0 ? max_count_dflt : max_count;
         } catch (...) {
             max_count = max_count_dflt;
         }
     }
 
-    std::cout << "lstest started" << std::endl;
+    std::cout << "lstest started (CPU cores: " << max_threads_dflt << ")" << std::endl;
 
     // atomic based spinlock with number of cores threads
     ResourceAtomicSpin rspin;
